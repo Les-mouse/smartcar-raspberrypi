@@ -1,37 +1,45 @@
-# 姝ラ4锛氭憚鍍忓ご + YOLO 鐩爣妫€娴嬶紙Day 7-8锛?
-## 鐩爣
-鏍戣帗娲捐窇 YOLOv8n 瀹炴椂鐩爣妫€娴嬶紝璇嗗埆瑙嗛噹涓殑鐗╀綋骞堕€氳繃 ROS2 鍙戝竷缁撴灉銆?
+# 步骤4：摄像头 + YOLO 目标检测（Day 7-8）
+
+## 目标
+树莓派跑 YOLOv8n 实时目标检测，识别视野中的物体并通过 ROS2 发布结果。
+
 ---
 
-## 4.1 鎽勫儚澶存帴鍏?
-```bash
-# 鎻掍笂 USB 鎽勫儚澶?# 妫€鏌ユ槸鍚﹁瘑鍒?ls /dev/video*
-# 搴旇鐪嬪埌 /dev/video0
+## 4.1 摄像头接入
 
-# 娴嬭瘯鎷嶇収
+```bash
+# 插上 USB 摄像头
+# 检查是否识别
+ls /dev/video*
+# 应该看到 /dev/video0
+
+# 测试拍照
 sudo apt install -y fswebcam
 fswebcam -r 640x480 test.jpg
-# 鎶?test.jpg 浼犲埌鐢佃剳涓婄湅鏄惁娓呮櫚
+# 把 test.jpg 传到电脑上看是否清晰
 ```
 
 ---
 
-## 4.2 瀹夎 YOLOv8
+## 4.2 安装 YOLOv8
 
 ```bash
-# 瀹夎 ultralytics锛圷OLOv8锛?pip install ultralytics
+# 安装 ultralytics（YOLOv8）
+pip install ultralytics
 
-# 涓嬭浇棰勮缁冩ā鍨嬶紙浼氳嚜鍔ㄤ笅杞?yolov8n.pt锛?python -c "
+# 下载预训练模型（会自动下载 yolov8n.pt）
+python -c "
 from ultralytics import YOLO
-model = YOLO('yolov8n.pt')  # nano鐗堬紝閫傚悎鏍戣帗娲?print('YOLOv8n 鍔犺浇鎴愬姛')
+model = YOLO('yolov8n.pt')  # nano版，适合树莓派
+print('YOLOv8n 加载成功')
 "
 
-# 娴嬭瘯妫€娴嬮€熷害
+# 测试检测速度
 python -c "
 from ultralytics import YOLO
 import time
 model = YOLO('yolov8n.pt')
-# 棰勭儹
+# 预热
 import numpy as np
 dummy = np.zeros((640, 480, 3), dtype=np.uint8)
 for _ in range(5):
@@ -41,14 +49,14 @@ start = time.time()
 for _ in range(30):
     model(dummy, verbose=False)
 elapsed = time.time() - start
-print(f'鎺ㄧ悊閫熷害: {30/elapsed:.1f} FPS')
-# 鏍戣帗娲? 澶ф鑳借窇 8-15 FPS
+print(f'推理速度: {30/elapsed:.1f} FPS')
+# 树莓派5 大概能跑 8-15 FPS
 "
 ```
 
 ---
 
-## 4.3 ROS2 瑙嗚鑺傜偣
+## 4.3 ROS2 视觉节点
 
 ```bash
 cd ~/ros2_ws/src
@@ -59,7 +67,8 @@ ros2 pkg create --build-type ament_python smartcar_vision \
 ```python
 # ~/ros2_ws/src/smartcar_vision/smartcar_vision/camera_node.py
 """
-鎽勫儚澶磋妭鐐癸細鍙戝竷鍥惧儚 + YOLO 妫€娴嬬粨鏋?"""
+摄像头节点：发布图像 + YOLO 检测结果
+"""
 
 import rclpy
 from rclpy.node import Node
@@ -76,46 +85,50 @@ class CameraNode(Node):
     def __init__(self):
         super().__init__('camera_node')
         
-        # 鎽勫儚澶?        self.cap = cv2.VideoCapture(0)
+        # 摄像头
+        self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         self.cap.set(cv2.CAP_PROP_FPS, 15)
         
         if not self.cap.isOpened():
-            self.get_logger().error('鏃犳硶鎵撳紑鎽勫儚澶?')
+            self.get_logger().error('无法打开摄像头!')
             return
         
-        # YOLO 妯″瀷
-        self.get_logger().info('鍔犺浇 YOLOv8n...')
+        # YOLO 模型
+        self.get_logger().info('加载 YOLOv8n...')
         self.model = YOLO('yolov8n.pt')
-        self.get_logger().info('YOLOv8n 灏辩华')
+        self.get_logger().info('YOLOv8n 就绪')
         
-        # 鍏虫敞鐨勭墿浣撶被鍒紙COCO鏁版嵁闆嗙殑绫诲埆ID锛?        self.target_classes = {
-            0: '浜?, 39: '鐡跺瓙', 41: '鏉瓙', 44: '鐡跺瓙',
-            56: '妞呭瓙', 62: '鐢佃', 63: '绗旇鏈?, 64: '榧犳爣',
-            67: '鎵嬫満', 73: '涔?, 75: '閬ユ帶鍣?, 76: '閿洏',
-            77: '鎵嬫満', 84: '涔?,
+        # 关注的物体类别（COCO数据集的类别ID）
+        self.target_classes = {
+            0: '人', 39: '瓶子', 41: '杯子', 44: '瓶子',
+            56: '椅子', 62: '电视', 63: '笔记本', 64: '鼠标',
+            67: '手机', 73: '书', 75: '遥控器', 76: '键盘',
+            77: '手机', 84: '书',
         }
         
-        # 鍙戝竷鑰?        self.bridge = CvBridge()
+        # 发布者
+        self.bridge = CvBridge()
         self.image_pub = self.create_publisher(
             CompressedImage, '/camera/image/compressed', 10)
         self.detection_pub = self.create_publisher(
             String, '/camera/detections', 10)
         
-        # 瀹氭椂鍣?        self.timer = self.create_timer(0.1, self.process_frame)  # 10Hz
+        # 定时器
+        self.timer = self.create_timer(0.1, self.process_frame)  # 10Hz
         
         self.fps_timer = time.time()
         self.frame_count = 0
         
-        self.get_logger().info('鎽勫儚澶磋妭鐐瑰氨缁?)
+        self.get_logger().info('摄像头节点就绪')
     
     def process_frame(self):
         ret, frame = self.cap.read()
         if not ret:
             return
         
-        # FPS 缁熻
+        # FPS 统计
         self.frame_count += 1
         if time.time() - self.fps_timer > 5:
             fps = self.frame_count / (time.time() - self.fps_timer)
@@ -123,7 +136,8 @@ class CameraNode(Node):
             self.frame_count = 0
             self.fps_timer = time.time()
         
-        # YOLO 妫€娴?        results = self.model(frame, verbose=False)
+        # YOLO 检测
+        results = self.model(frame, verbose=False)
         
         detections = []
         for r in results:
@@ -133,9 +147,10 @@ class CameraNode(Node):
                     cls_id = int(box.cls[0])
                     conf = float(box.conf[0])
                     
-                    if conf < 0.5:  # 缃俊搴﹁繃婊?                        continue
+                    if conf < 0.5:  # 置信度过滤
+                        continue
                     
-                    # 鑾峰彇鍧愭爣
+                    # 获取坐标
                     xyxy = box.xyxy[0].cpu().numpy()
                     x1, y1, x2, y2 = xyxy
                     cx = (x1 + x2) / 2
@@ -152,7 +167,7 @@ class CameraNode(Node):
                         'height': round(float(y2 - y1), 1)
                     })
                     
-                    # 鐢绘
+                    # 画框
                     cv2.rectangle(frame, (int(x1), int(y1)), 
                                   (int(x2), int(y2)), (0, 255, 0), 2)
                     cv2.putText(frame, f'{name} {conf:.2f}',
@@ -160,12 +175,13 @@ class CameraNode(Node):
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
                                (0, 255, 0), 1)
         
-        # 鍙戝竷妫€娴嬬粨鏋?        import json
+        # 发布检测结果
+        import json
         msg = String()
         msg.data = json.dumps(detections, ensure_ascii=False)
         self.detection_pub.publish(msg)
         
-        # 鍙戝竷鍘嬬缉鍥惧儚
+        # 发布压缩图像
         img_msg = self.bridge.cv2_to_compressed_imgmsg(frame)
         img_msg.header.stamp = self.get_clock().now().to_msg()
         self.image_pub.publish(img_msg)
@@ -184,12 +200,13 @@ def main():
 
 ---
 
-## 4.4 缂栧啓 Web 瑙嗛娴侊紙鏂逛究鎵嬫満鏌ョ湅锛?
+## 4.4 编写 Web 视频流（方便手机查看）
+
 ```python
 # ~/ros2_ws/src/smartcar_vision/smartcar_vision/stream_server.py
 """
-杞婚噺 HTTP 瑙嗛娴侊紝鎵嬫満/PC娴忚鍣ㄥ彲鐩存帴鏌ョ湅
-璁块棶: http://鏍戣帗娲綢P:8080
+轻量 HTTP 视频流，手机/PC浏览器可直接查看
+访问: http://树莓派IP:8080
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -197,7 +214,8 @@ import cv2
 import threading
 import numpy as np
 
-# 鍏ㄥ眬鍙橀噺锛氭渶鏂扮殑甯э紙鐢?ROS2 鑺傜偣鍐欏叆锛?latest_frame = None
+# 全局变量：最新的帧（由 ROS2 节点写入）
+latest_frame = None
 frame_lock = threading.Lock()
 
 def update_frame(frame):
@@ -208,7 +226,7 @@ def update_frame(frame):
 class StreamHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/':
-            # 绠€鍗旽TML椤甸潰
+            # 简单HTML页面
             html = """
             <html><head><title>SmartCar View</title></head>
             <body style="margin:0;background:#000">
@@ -221,7 +239,8 @@ class StreamHandler(BaseHTTPRequestHandler):
             self.wfile.write(html.encode())
         
         elif self.path == '/stream':
-            # MJPEG 娴?            self.send_response(200)
+            # MJPEG 流
+            self.send_response(200)
             self.send_header('Content-type', 
                 'multipart/x-mixed-replace; boundary=frame')
             self.end_headers()
@@ -244,7 +263,7 @@ class StreamHandler(BaseHTTPRequestHandler):
                 time.sleep(0.1)  # 10 FPS
         
         elif self.path == '/snap':
-            # 鍗曞紶鐓х墖
+            # 单张照片
             with frame_lock:
                 if latest_frame is None:
                     self.send_error(404)
@@ -258,9 +277,9 @@ class StreamHandler(BaseHTTPRequestHandler):
             self.wfile.write(jpeg.tobytes())
         
         elif self.path == '/detections':
-            # 杩斿洖妫€娴嬬粨鏋淛SON
+            # 返回检测结果JSON
             import json
-            # (杩欓噷浠?ROS2 璇濋鎷垮埌鏁版嵁锛岀畝鍖栫敤鍏ㄥ眬鍙橀噺)
+            # (这里从 ROS2 话题拿到数据，简化用全局变量)
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
@@ -268,11 +287,12 @@ class StreamHandler(BaseHTTPRequestHandler):
 
 def start_stream_server(port=8080):
     server = HTTPServer(('0.0.0.0', port), StreamHandler)
-    print(f'瑙嗛娴佸凡鍚姩: http://鏍戣帗娲綢P:{port}')
+    print(f'视频流已启动: http://树莓派IP:{port}')
     server.serve_forever()
 
 if __name__ == '__main__':
-    # 鐙珛杩愯娴嬭瘯锛堜笉鎺OS2锛?    cap = cv2.VideoCapture(0)
+    # 独立运行测试（不接ROS2）
+    cap = cv2.VideoCapture(0)
     def capture():
         global latest_frame
         while True:
@@ -282,10 +302,10 @@ if __name__ == '__main__':
     
     threading.Thread(target=capture, daemon=True).start()
     threading.Thread(target=start_stream_server, daemon=True).start()
-    input('鎸夊洖杞﹂€€鍑?..\n')
+    input('按回车退出...\n')
 ```
 
-### 淇敼 setup.py 娣诲姞鍏ュ彛
+### 修改 setup.py 添加入口
 
 ```python
 # ~/ros2_ws/src/smartcar_vision/setup.py
@@ -299,22 +319,25 @@ entry_points={
 
 ---
 
-## 4.5 鑷畾涔夌墿浣撹缁冿紙鍙€夛級
+## 4.5 自定义物体训练（可选）
 
-濡傛灉 YOLOv8 棰勮缁冩ā鍨嬭瘑鍒笉浜嗕綘鍏冲績鐨勭墿浣擄紝鍙互鑷繁璁粌锛?
+如果 YOLOv8 预训练模型识别不了你关心的物体，可以自己训练：
+
 ```python
-# train_custom.py - 鍦ㄧ數鑴戜笂璁粌锛堟爲鑾撴淳澶參锛?from ultralytics import YOLO
+# train_custom.py - 在电脑上训练（树莓派太慢）
+from ultralytics import YOLO
 
-# 1. 鍑嗗鏁版嵁闆嗭紙鐢?LabelImg 鏍囨敞锛?#    dataset/
-#    鈹溾攢鈹€ images/
-#    鈹?  鈹溾攢鈹€ train/
-#    鈹?  鈹斺攢鈹€ val/
-#    鈹溾攢鈹€ labels/
-#    鈹?  鈹溾攢鈹€ train/
-#    鈹?  鈹斺攢鈹€ val/
-#    鈹斺攢鈹€ data.yaml
+# 1. 准备数据集（用 LabelImg 标注）
+#    dataset/
+#    ├── images/
+#    │   ├── train/
+#    │   └── val/
+#    ├── labels/
+#    │   ├── train/
+#    │   └── val/
+#    └── data.yaml
 
-# 2. 璁粌
+# 2. 训练
 model = YOLO('yolov8n.pt')
 model.train(
     data='dataset/data.yaml',
@@ -324,46 +347,53 @@ model.train(
     name='smartcar_custom'
 )
 
-# 3. 瀵煎嚭涓?ONNX锛堝彲閫夛紝鍔犻€熸帹鐞嗭級
+# 3. 导出为 ONNX（可选，加速推理）
 model.export(format='onnx')
-# 澶嶅埗 best.pt 鎴?best.onnx 鍒版爲鑾撴淳
+# 复制 best.pt 或 best.onnx 到树莓派
 ```
 
 ---
 
-## 鉁?Day 7-8 楠屾敹鏍囧噯
+## ✅ Day 7-8 验收标准
 
-- [ ] 鎽勫儚澶磋兘姝ｅ父閲囬泦鍥惧儚
-- [ ] YOLO 鑳借瘑鍒父瑙佺墿浣擄紙浜恒€佹澂瀛愩€佹墜鏈恒€佷功绛夛級
-- [ ] ROS2 璇濋 `/camera/detections` 姝ｅ父鍙戝竷
-- [ ] 娴忚鍣ㄦ墦寮€ `http://鏍戣帗娲綢P:8080` 鑳界湅鍒板疄鏃惰棰戞祦
-- [ ] 妫€娴嬫鍑嗙‘锛堜汉鍦ㄧ敾闈㈤噷妗嗗埌浜嗭級
+- [ ] 摄像头能正常采集图像
+- [ ] YOLO 能识别常见物体（人、杯子、手机、书等）
+- [ ] ROS2 话题 `/camera/detections` 正常发布
+- [ ] 浏览器打开 `http://树莓派IP:8080` 能看到实时视频流
+- [ ] 检测框准确（人在画面里框到了）
 
-### 璋冭瘯
+### 调试
 
 ```bash
-# 鏌ョ湅妫€娴嬬粨鏋?ros2 topic echo /camera/detections
+# 查看检测结果
+ros2 topic echo /camera/detections
 
-# 鏌ョ湅鍥惧儚璇濋
+# 查看图像话题
 ros2 topic hz /camera/image/compressed
 
-# 娴嬭瘯鎽勫儚澶寸嫭绔?python -c "
+# 测试摄像头独立
+python -c "
 import cv2
 cap = cv2.VideoCapture(0)
 ret, frame = cap.read()
 cv2.imwrite('test.jpg', frame)
-print('鎷嶇収鎴愬姛')
+print('拍照成功')
 cap.release()
 "
 ```
 
-### 鎬ц兘浼樺寲锛堝鏋?FPS 澶綆锛?
+### 性能优化（如果 FPS 太低）
+
 ```python
-# 鍦?camera_node 涓敼鐢?TensorRT 鍔犻€燂紙Jetson 鎵嶈锛屾爲鑾撴淳涓嶆敮鎸侊級
-# 鏍戣帗娲句紭鍖栨柟妗堬細
-# 1. 鍑忓皯鍒嗚鲸鐜?self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+# 在 camera_node 中改用 TensorRT 加速（Jetson 才行，树莓派不支持）
+# 树莓派优化方案：
+# 1. 减少分辨率
+self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
-# 2. 闄嶄綆妫€娴嬮鐜?self.timer = self.create_timer(0.3, self.process_frame)  # 3Hz
+# 2. 降低检测频率
+self.timer = self.create_timer(0.3, self.process_frame)  # 3Hz
 
-# 3. 浣跨敤鏇村皬鐨勬ā鍨?self.model = YOLO('yolov8n.pt')  # 宸茬粡鏄渶灏忕殑浜?```
+# 3. 使用更小的模型
+self.model = YOLO('yolov8n.pt')  # 已经是最小的了
+```
