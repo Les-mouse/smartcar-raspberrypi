@@ -1,31 +1,52 @@
-# 姝ラ6锛歄penClaw AI澶ц剳 + 寰俊鎺у埗 猸愶紙Day 11-12锛?
-## 鐩爣
-浣犲湪寰俊閲岃窡灏忚溅璇磋瘽锛屽皬杞﹁兘鍚噦銆佹墽琛屼换鍔°€佸洖澶嶇粨鏋溿€?
+# 步骤6：OpenClaw AI大脑 + 微信控制 ⭐（Day 11-12）
+
+## 目标
+你在微信里跟小车说话，小车能听懂、执行任务、回复结果。
+
 ---
 
-## 6.1 鏁翠綋閫氫俊鏋舵瀯
+## 6.1 整体通信架构
 
 ```
-鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?  浣犵殑寰俊       鈹?鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?       鈫?(寰俊API)
-鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹? 浣犵殑鐢佃剳       鈹? 鈫?宸茬粡璺戠潃 OpenClaw
-鈹? OpenClaw      鈹?鈹? 鈹溾攢 鐞嗚В鎰忓浘   鈹?鈹? 鈹溾攢 浠诲姟瑙勫垝   鈹?鈹? 鈹斺攢 鎵цSkill  鈹?鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?       鈫?WiFi / WebSocket
-鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹? 鏍戣帗娲?        鈹?鈹? openclaw_bridge鈹? 鈫?鎺ユ敹鎸囦护锛岃繑鍥炵粨鏋?鈹?      鈫?        鈹?鈹?  ROS2 缃戠粶     鈹?鈹?      鈫?        鈹?鈹? Arduino Mega   鈹? 鈫?瀹為檯鎺у埗
-鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?```
+┌────────────────┐
+│   你的微信       │
+└──────┬─────────┘
+       ↓ (微信API)
+┌────────────────┐
+│  你的电脑       │  ← 已经跑着 OpenClaw
+│  OpenClaw      │
+│  ├─ 理解意图   │
+│  ├─ 任务规划   │
+│  └─ 执行Skill  │
+└──────┬─────────┘
+       ↓ WiFi / WebSocket
+┌────────────────┐
+│  树莓派5        │
+│  openclaw_bridge│  ← 接收指令，返回结果
+│       ↓         │
+│   ROS2 网络     │
+│       ↓         │
+│  Arduino Mega   │  ← 实际控制
+└────────────────┘
+```
 
-**鏍稿績鎬濊矾**锛歄penClaw 閫氳繃 Skill 璋冪敤涓€涓?WebSocket API 鈫?鏍戣帗娲句笂璺?bridge 鈫?杞垚 ROS2 璇濋/鏈嶅姟 鈫?鎺у埗灏忚溅銆?
+**核心思路**：OpenClaw 通过 Skill 调用一个 WebSocket API → 树莓派上跑 bridge → 转成 ROS2 话题/服务 → 控制小车。
+
 ---
 
-## 6.2 鏍戣帗娲剧锛歐ebSocket Bridge Server
+## 6.2 树莓派端：WebSocket Bridge Server
 
 ```bash
-# 鍦ㄦ爲鑾撴淳涓婂畨瑁呬緷璧?pip install websockets asyncio
+# 在树莓派上安装依赖
+pip install websockets asyncio
 ```
 
 ```python
 # ~/robot_bridge/bridge_server.py
 """
 OpenClaw Bridge Server
-鐩戝惉 WebSocket锛屾帴鏀禣penClaw鍙戞潵鐨勬寚浠わ紝鎺у埗ROS2鏈哄櫒浜?"""
+监听 WebSocket，接收OpenClaw发来的指令，控制ROS2机器人
+"""
 
 import asyncio
 import websockets
@@ -44,12 +65,12 @@ class RobotBridge:
         self.pose = {'x': 0, 'y': 0, 'theta': 0}
         self.battery = 100
         
-        # 鍚姩 ROS2 鐩戝惉绾跨▼
+        # 启动 ROS2 监听线程
         self.ros_thread = threading.Thread(target=self.ros_listener, daemon=True)
         self.ros_thread.start()
     
     def ros_listener(self):
-        """鐩戝惉 ROS2 璇濋锛屾洿鏂扮姸鎬?""
+        """监听 ROS2 话题，更新状态"""
         import rclpy
         from rclpy.node import Node
         from std_msgs.msg import String
@@ -72,7 +93,7 @@ class RobotBridge:
         rclpy.spin(node)
     
     def execute_command(self, action, params):
-        """鎵цROS2鍛戒护"""
+        """执行ROS2命令"""
         cmd_map = {
             'move': self.cmd_move,
             'rotate': self.cmd_rotate,
@@ -87,10 +108,11 @@ class RobotBridge:
         func = cmd_map.get(action)
         if func:
             return func(params)
-        return {'error': f'鏈煡鍔ㄤ綔: {action}'}
+        return {'error': f'未知动作: {action}'}
     
     def cmd_move(self, params):
-        distance = params.get('distance', 0.5)  # 绫?        speed = params.get('speed', 0.2)
+        distance = params.get('distance', 0.5)  # 米
+        speed = params.get('speed', 0.2)
         duration = distance / speed
         cmd = f'ros2 topic pub /cmd_vel geometry_msgs/msg/Twist ' \
               f'"{{linear: {{x: {speed}}}, angular: {{z: 0.0}}}}" -1'
@@ -100,7 +122,8 @@ class RobotBridge:
         return {'action': 'move', 'distance': distance, 'status': 'done'}
     
     def cmd_rotate(self, params):
-        angle = params.get('angle', 90)  # 搴?        speed = params.get('speed', 0.5)
+        angle = params.get('angle', 90)  # 度
+        speed = params.get('speed', 0.5)
         duration = abs(angle) / 180.0 / speed
         direction = 1 if angle > 0 else -1
         cmd = f'ros2 topic pub /cmd_vel geometry_msgs/msg/Twist ' \
@@ -118,7 +141,7 @@ class RobotBridge:
         return {'action': 'stop', 'status': 'stopped'}
     
     def cmd_snap(self, params):
-        """鎷嶇収骞惰繑鍥炲浘鐗嘦RL"""
+        """拍照并返回图片URL"""
         import cv2
         cap = cv2.VideoCapture(0)
         ret, frame = cap.read()
@@ -131,10 +154,10 @@ class RobotBridge:
                 'detections': self.last_detections
             }
         cap.release()
-        return {'error': '鎷嶇収澶辫触'}
+        return {'error': '拍照失败'}
     
     def cmd_scan(self, params):
-        """鎵弿瑙嗛噹涓殑鐗╀綋"""
+        """扫描视野中的物体"""
         return {
             'action': 'scan',
             'objects': self.last_detections,
@@ -142,7 +165,7 @@ class RobotBridge:
         }
     
     def cmd_patrol(self, params):
-        """鍚姩鑷姩宸￠€?""
+        """启动自动巡逻"""
         waypoints = params.get('waypoints', [])
         subprocess.run(
             'ros2 run smartcar_nav patrol &',
@@ -151,17 +174,18 @@ class RobotBridge:
         return {'action': 'patrol', 'status': 'started', 'waypoints': waypoints}
     
     def cmd_track(self, params):
-        """璺熻釜鎸囧畾鐗╀綋"""
+        """跟踪指定物体"""
         target = params.get('target', 'person')
-        # 閫氳繃鍙傛暟鏈嶅姟鍣ㄨ缃洰鏍?        subprocess.run(
+        # 通过参数服务器设置目标
+        subprocess.run(
             f'ros2 param set /avoidance target_object "{target}"',
             shell=True, timeout=1)
         self.mode = 'track'
         return {'action': 'track', 'target': target, 'status': 'tracking'}
     
     def cmd_say(self, params):
-        """TTS 璇煶鎾姤"""
-        text = params.get('text', '浣犲ソ')
+        """TTS 语音播报"""
+        text = params.get('text', '你好')
         subprocess.run(f'espeak-ng "{text}" 2>/dev/null || '
                        f'echo "{text}" | festival --tts 2>/dev/null || '
                        f'echo "TTS not available"',
@@ -180,16 +204,17 @@ def get_ip():
         s.close()
     return ip
 
-# ===== WebSocket 鏈嶅姟 =====
+# ===== WebSocket 服务 =====
 
 bridge = RobotBridge()
 
 async def handle_client(websocket):
-    """澶勭悊 OpenClaw 鍙戞潵鐨?WebSocket 杩炴帴"""
+    """处理 OpenClaw 发来的 WebSocket 连接"""
     client_ip = websocket.remote_address
-    print(f"OpenClaw 宸茶繛鎺? {client_ip}")
+    print(f"OpenClaw 已连接: {client_ip}")
     
-    # 鍙戦€佹杩庢秷鎭?    await websocket.send(json.dumps({
+    # 发送欢迎消息
+    await websocket.send(json.dumps({
         'type': 'ready',
         'robot': 'SmartCar',
         'status': bridge.mode,
@@ -203,12 +228,12 @@ async def handle_client(websocket):
                 action = data.get('action', '')
                 params = data.get('params', {})
                 
-                print(f"鏀跺埌鎸囦护: {action} {params}")
+                print(f"收到指令: {action} {params}")
                 
-                # 鎵ц鍛戒护
+                # 执行命令
                 result = bridge.execute_command(action, params)
                 
-                # 杩斿洖缁撴灉
+                # 返回结果
                 response = {
                     'type': 'result',
                     'request_id': data.get('request_id', ''),
@@ -219,7 +244,7 @@ async def handle_client(websocket):
             except json.JSONDecodeError:
                 await websocket.send(json.dumps({
                     'type': 'error',
-                    'message': '鏃犳晥鐨凧SON'
+                    'message': '无效的JSON'
                 }))
             except Exception as e:
                 await websocket.send(json.dumps({
@@ -227,40 +252,41 @@ async def handle_client(websocket):
                     'message': str(e)
                 }))
     except websockets.exceptions.ConnectionClosed:
-        print(f"OpenClaw 鏂紑: {client_ip}")
+        print(f"OpenClaw 断开: {client_ip}")
 
 async def main():
-    # TTS 瀹夎鎻愮ず
-    print("鎻愮ず: sudo apt install espeak-ng 鏉ュ畨瑁?TTS")
+    # TTS 安装提示
+    print("提示: sudo apt install espeak-ng 来安装 TTS")
     
-    # 鍚姩 WebSocket 鏈嶅姟
+    # 启动 WebSocket 服务
     ip = get_ip()
     port = 8765
-    print(f"Bridge Server 鍚姩: ws://{ip}:{port}")
+    print(f"Bridge Server 启动: ws://{ip}:{port}")
     
     async with websockets.serve(handle_client, "0.0.0.0", port):
-        await asyncio.Future()  # 姘镐箙杩愯
+        await asyncio.Future()  # 永久运行
 
 if __name__ == '__main__':
     asyncio.run(main())
 ```
 
-### 鍚姩 Bridge
+### 启动 Bridge
 
 ```bash
-# 鏍戣帗娲句笂
+# 树莓派上
 cd ~/robot_bridge
 python3 bridge_server.py
-# 杈撳嚭: Bridge Server 鍚姩: ws://192.168.x.x:8765
+# 输出: Bridge Server 启动: ws://192.168.x.x:8765
 ```
 
 ---
 
-## 6.3 OpenClaw Skill锛氭満鍣ㄤ汉鎺у埗
+## 6.3 OpenClaw Skill：机器人控制
 
-杩欐槸鏈€鍏抽敭鐨勯儴鍒嗭紒鍦ㄤ綘鐨勭數鑴戜笂锛圤penClaw宸茶繍琛岋級锛?
+这是最关键的部分！在你的电脑上（OpenClaw已运行）：
+
 ```bash
-# 鍒涘缓 skill 鐩綍
+# 创建 skill 目录
 mkdir -p ~/.openclaw/workspace/skills/smartcar-control
 ```
 
@@ -270,64 +296,74 @@ mkdir -p ~/.openclaw/workspace/skills/smartcar-control
 # ~/.openclaw/workspace/skills/smartcar-control/SKILL.md
 ---
 name: smartcar-control
-description: 鎺у埗鏅鸿兘灏忚溅鈥斺€斿贰閫汇€佹壘涓滆タ銆侀€佺墿鍝併€佺幆澧冨贰妫€銆傞€氳繃WebSocket杩炴帴鏍戣帗娲句笂鐨刡ridge_server銆?user-invocable: true
+description: 控制智能小车——巡逻、找东西、送物品、环境巡检。通过WebSocket连接树莓派上的bridge_server。
+user-invocable: true
 ---
 
-# 鏅鸿兘灏忚溅鎺у埗
+# 智能小车控制
 
-## 杩炴帴淇℃伅
+## 连接信息
 
-灏忚溅 bridge 杩愯鍦ㄦ爲鑾撴淳涓婏細
-- WebSocket: `ws://鏍戣帗娲綢P:8765`
-- 瑙嗛娴? `http://鏍戣帗娲綢P:8080/stream`
+小车 bridge 运行在树莓派上：
+- WebSocket: `ws://树莓派IP:8765`
+- 视频流: `http://树莓派IP:8080/stream`
 
-## 鍙敤鍔ㄤ綔
+## 可用动作
 
-1. **move(distance, speed)** 鈥?鍓嶈繘/鍚庨€€
-   - 鐢ㄦ硶: `move distance=0.5` 鍓嶈繘50cm锛宍move distance=-0.3` 鍚庨€€30cm
+1. **move(distance, speed)** — 前进/后退
+   - 用法: `move distance=0.5` 前进50cm，`move distance=-0.3` 后退30cm
 
-2. **rotate(angle)** 鈥?鍘熷湴鏃嬭浆
-   - 鐢ㄦ硶: `rotate angle=90` 鍙宠浆90掳锛宍rotate angle=-45` 宸﹁浆45掳
+2. **rotate(angle)** — 原地旋转
+   - 用法: `rotate angle=90` 右转90°，`rotate angle=-45` 左转45°
 
-3. **snap()** 鈥?鎷嶇収骞惰繑鍥炴娴嬪埌鐨勭墿浣?
-4. **scan()** 鈥?鎵弿瑙嗛噹涓殑鐗╀綋
+3. **snap()** — 拍照并返回检测到的物体
 
-5. **patrol(waypoints)** 鈥?鑷姩宸￠€?   - waypoints: 宸￠€昏矾绾跨偣鍒楄〃锛屽 ["瀹㈠巺", "鍗у"]
+4. **scan()** — 扫描视野中的物体
 
-6. **track(target)** 鈥?璺熻釜鎸囧畾鐗╀綋
-   - 鐢ㄦ硶: `track target="浜?` 璺熻釜浜猴紝`track target="鎵嬫満"`
+5. **patrol(waypoints)** — 自动巡逻
+   - waypoints: 巡逻路线点列表，如 ["客厅", "卧室"]
 
-7. **stop()** 鈥?鎬ュ仠
+6. **track(target)** — 跟踪指定物体
+   - 用法: `track target="人"` 跟踪人，`track target="手机"`
 
-8. **say(text)** 鈥?璇煶鎾姤
+7. **stop()** — 急停
 
-## 璋冪敤鏂瑰紡
+8. **say(text)** — 语音播报
 
-閫氳繃鎵ц鍛戒护璋冪敤锛圵ebSocket 閫氫俊浣跨敤 Python 鑴氭湰锛?
+## 调用方式
+
+通过执行命令调用（WebSocket 通信使用 Python 脚本）:
 
 ```bash
-# 鎵€鏈夊懡浠ら€氳繃 bridge_client.py 鍙戦€?python ~/.openclaw/workspace/skills/smartcar-control/bridge_client.py <action> <params_json>
+# 所有命令通过 bridge_client.py 发送
+python ~/.openclaw/workspace/skills/smartcar-control/bridge_client.py <action> <params_json>
 ```
 
-绀轰緥:
+示例:
 ```bash
-# 鍓嶈繘50cm
+# 前进50cm
 python bridge_client.py move '{"distance": 0.5}'
 
-# 鎷嶇収鐪嬫湁浠€涔?python bridge_client.py snap '{}'
+# 拍照看有什么
+python bridge_client.py snap '{}'
 
-# 璺熻釜浜?python bridge_client.py track '{"target": "浜?}'
+# 跟踪人
+python bridge_client.py track '{"target": "人"}'
 ```
 
-## 甯歌鍦烘櫙
+## 常见场景
 
-### 宸￠€?鐢ㄦ埛璇?鍘诲贰閫? 鈫?rotate 360掳鎵弿 鈫?璧伴璁捐矾绾?鈫?鏈夊紓甯告媿鐓у彂寰俊
+### 巡逻
+用户说"去巡逻" → rotate 360°扫描 → 走预设路线 → 有异常拍照发微信
 
-### 鎵句笢瑗?鐢ㄦ埛璇?鎵句竴涓嬮挜鍖? 鈫?鍚姩 patrol 妯″紡 鈫?YOLO妫€娴嬪埌閽ュ寵 鈫?snap 鈫?鍋滄 鈫?鍙戦€佸浘鐗?浣嶇疆
+### 找东西
+用户说"找一下钥匙" → 启动 patrol 模式 → YOLO检测到钥匙 → snap → 停止 → 发送图片+位置
 
-### 閫佷笢瑗?鐢ㄦ埛璇?鎶婅繖涓€佸埌涔︽埧" 鈫?move forward 鈫?鍒颁功鎴?鈫?say "鍒颁簡"
+### 送东西
+用户说"把这个送到书房" → move forward → 到书房 → say "到了"
 
-### 鐜妫€鏌?鐢ㄦ埛璇?鐪嬬湅娓╁害" 鈫?璇诲彇 DHT22 鈫?鍥炲"26掳C"
+### 环境检查
+用户说"看看温度" → 读取 DHT22 → 回复"26°C"
 ```
 
 ### bridge_client.py
@@ -335,7 +371,8 @@ python bridge_client.py move '{"distance": 0.5}'
 ```python
 # ~/.openclaw/workspace/skills/smartcar-control/bridge_client.py
 """
-OpenClaw 鈫?鏍戣帗娲?Bridge WebSocket 瀹㈡埛绔?鍦?OpenClaw Skill 涓璋冪敤
+OpenClaw → 树莓派 Bridge WebSocket 客户端
+在 OpenClaw Skill 中被调用
 """
 
 import asyncio
@@ -344,12 +381,13 @@ import json
 import sys
 import os
 
-# 閰嶇疆锛氭爲鑾撴淳 IP锛堜慨鏀逛负浣犵殑鏍戣帗娲綢P锛?ROBOT_IP = os.environ.get('SMARTCAR_IP', '192.168.1.100')
+# 配置：树莓派 IP（修改为你的树莓派IP）
+ROBOT_IP = os.environ.get('SMARTCAR_IP', '192.168.1.100')
 BRIDGE_PORT = 8765
-TIMEOUT = 10  # 瓒呮椂绉掓暟
+TIMEOUT = 10  # 超时秒数
 
 async def send_command(action, params=None, request_id=''):
-    """鍙戦€佹寚浠ゅ苟绛夊緟缁撴灉"""
+    """发送指令并等待结果"""
     if params is None:
         params = {}
     
@@ -357,30 +395,31 @@ async def send_command(action, params=None, request_id=''):
     
     try:
         async with websockets.connect(uri, close_timeout=5) as ws:
-            # 鍙戦€佹寚浠?            msg = {
+            # 发送指令
+            msg = {
                 'action': action,
                 'params': params,
                 'request_id': request_id
             }
             await ws.send(json.dumps(msg))
             
-            # 绛夊緟鍝嶅簲
+            # 等待响应
             response = await asyncio.wait_for(ws.recv(), timeout=TIMEOUT)
             return json.loads(response)
     
     except asyncio.TimeoutError:
-        return {'error': '鎸囦护瓒呮椂锛屽皬杞﹀彲鑳界绾?}
+        return {'error': '指令超时，小车可能离线'}
     except Exception as e:
-        return {'error': f'杩炴帴澶辫触: {str(e)}'}
+        return {'error': f'连接失败: {str(e)}'}
 
 def run_command(action, params=None):
-    """鍚屾鍖呰鍣?""
+    """同步包装器"""
     return asyncio.run(send_command(action, params))
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("鐢ㄦ硶: bridge_client.py <action> [params_json]")
-        print("绀轰緥: bridge_client.py move '{\"distance\": 0.5}'")
+        print("用法: bridge_client.py <action> [params_json]")
+        print("示例: bridge_client.py move '{\"distance\": 0.5}'")
         sys.exit(1)
     
     action = sys.argv[1]
@@ -389,7 +428,7 @@ if __name__ == '__main__':
         try:
             params = json.loads(sys.argv[2])
         except json.JSONDecodeError:
-            print(f"鍙傛暟JSON鏍煎紡閿欒: {sys.argv[2]}")
+            print(f"参数JSON格式错误: {sys.argv[2]}")
             sys.exit(1)
     
     result = run_command(action, params)
@@ -398,59 +437,65 @@ if __name__ == '__main__':
 
 ---
 
-## 6.4 娴嬭瘯鑱旈€?
-```bash
-# 1. 鍦ㄦ爲鑾撴淳涓婂惎鍔?bridge
-python3 ~/robot_bridge/bridge_server.py
-# 鎻愮ず: Bridge Server 鍚姩: ws://192.168.1.xxx:8765
+## 6.4 测试联通
 
-# 2. 鍦ㄧ數鑴戜笂锛圤penClaw杩欒竟锛夋祴璇?# 鍏堣缃爲鑾撴淳IP
+```bash
+# 1. 在树莓派上启动 bridge
+python3 ~/robot_bridge/bridge_server.py
+# 提示: Bridge Server 启动: ws://192.168.1.xxx:8765
+
+# 2. 在电脑上（OpenClaw这边）测试
+# 先设置树莓派IP
 export SMARTCAR_IP=192.168.1.xxx
 
-# 娴嬭瘯鎷嶇収
+# 测试拍照
 python ~/.openclaw/workspace/skills/smartcar-control/bridge_client.py snap '{}'
 
-# 娴嬭瘯绉诲姩
+# 测试移动
 python ~/.openclaw/workspace/skills/smartcar-control/bridge_client.py move '{"distance": 0.3}'
 
-# 娴嬭瘯鎵弿
+# 测试扫描
 python ~/.openclaw/workspace/skills/smartcar-control/bridge_client.py scan '{}'
 
-# 搴旇杩斿洖:
+# 应该返回:
 # {
 #   "action": "scan",
-#   "objects": [{"class": "浜?, "confidence": 0.85, ...}],
+#   "objects": [{"class": "人", "confidence": 0.85, ...}],
 #   "count": 1
 # }
 ```
 
 ---
 
-## 6.5 鍦?OpenClaw 涓敞鍐?Skill
+## 6.5 在 OpenClaw 中注册 Skill
 
 ```bash
-# OpenClaw 浼氳嚜鍔ㄥ姞杞?skills 鐩綍涓嬬殑 SKILL.md
-# 閲嶅惎 OpenClaw 鎴栭噸鏂板姞杞介厤缃?
-# 妫€鏌?skill 鏄惁鍔犺浇
-openclaw skills list
-# 搴旇鑳界湅鍒?smartcar-control
+# OpenClaw 会自动加载 skills 目录下的 SKILL.md
+# 重启 OpenClaw 或重新加载配置
 
-# 娴嬭瘯锛氱洿鎺ュ湪 OpenClaw 鑱婂ぉ涓紙鎴栭€氳繃寰俊锛?# "甯垜鐪嬩笅杞﹀墠闈㈡湁浠€涔?
+# 检查 skill 是否加载
+openclaw skills list
+# 应该能看到 smartcar-control
+
+# 测试：直接在 OpenClaw 聊天中（或通过微信）
+# "帮我看下车前面有什么"
 ```
 
 ---
 
-## 鉁?Day 11-12 楠屾敹鏍囧噯
+## ✅ Day 11-12 验收标准
 
-- [ ] 鐢佃剳鑳?ping 閫氭爲鑾撴淳
-- [ ] `bridge_server.py` 姝ｅ父杩愯
-- [ ] `bridge_client.py snap` 杩斿洖妫€娴嬬粨鏋?- [ ] `bridge_client.py move '{"distance":0.3}'` 杞﹁兘鍔?- [ ] 寰俊鍙戞寚浠?鈫?OpenClaw 鈫?杞︽湁鍙嶅簲
+- [ ] 电脑能 ping 通树莓派
+- [ ] `bridge_server.py` 正常运行
+- [ ] `bridge_client.py snap` 返回检测结果
+- [ ] `bridge_client.py move '{"distance":0.3}'` 车能动
+- [ ] 微信发指令 → OpenClaw → 车有反应
 
-### 鎺掗敊
+### 排错
 
-| 闂 | 鎺掓煡 |
+| 问题 | 排查 |
 |------|------|
-| WebSocket 杩炰笉涓?| 妫€鏌?IP銆佺鍙ｃ€侀槻鐏 `sudo ufw allow 8765` |
-| 鎸囦护娌″弽搴?| 妫€鏌?ROS2 鑺傜偣鏄惁鍦ㄨ繍琛屻€佽瘽棰樻槸鍚︽纭?|
-| 杩斿洖閿欒JSON | 妫€鏌?Python 鐗堟湰 (闇€瑕?3.7+) |
-| OpenClaw 鎵句笉鍒?skill | 妫€鏌?SKILL.md 璺緞鍜屾牸寮?|
+| WebSocket 连不上 | 检查 IP、端口、防火墙 `sudo ufw allow 8765` |
+| 指令没反应 | 检查 ROS2 节点是否在运行、话题是否正确 |
+| 返回错误JSON | 检查 Python 版本 (需要 3.7+) |
+| OpenClaw 找不到 skill | 检查 SKILL.md 路径和格式 |
