@@ -1,75 +1,91 @@
-# 姝ラ3锛欰rduino搴曞眰閫氫俊 + 閿洏閬ユ帶锛圖ay 5-6锛?
-## 鐩爣
-鏍戣帗娲鹃€氳繃涓插彛鎺у埗 Arduino锛岃兘鐢ㄩ敭鐩橀仴鎺у皬杞﹁窇璧锋潵銆?
+# 步骤3：Arduino底层通信 + 键盘遥控（Day 5-6）
+
+## 目标
+树莓派通过串口控制 Arduino，能用键盘遥控小车跑起来。
+
 ---
 
-## 3.1 鏍戣帗娲?鈫?Arduino 涓插彛杩炴帴
+## 3.1 树莓派 ↔ Arduino 串口连接
 
-### 鎺ョ嚎
+### 接线
 ```
-鏍戣帗娲?                    Arduino Mega
-  GND (pin 6)    鈹€鈹€鈹€鈹€鈹€鈹€鈫? GND
-  TX  (pin 8)    鈹€鈹€鈹€鈹€鈹€鈹€鈫? RX1 (pin 19) 鈫?瀹為檯杩?RX
-  RX  (pin 10)   鈹€鈹€鈹€鈹€鈹€鈹€鈫? TX1 (pin 18) 鈫?瀹為檯杩?TX
+树莓派5                    Arduino Mega
+  GND (pin 6)    ──────→  GND
+  TX  (pin 8)    ──────→  RX1 (pin 19) ← 实际连 RX
+  RX  (pin 10)   ──────→  TX1 (pin 18) ← 实际连 TX
 ```
 
-> 鈿狅笍 鏍戣帗娲?GPIO 鏄?3.3V锛孉rduino 鏄?5V銆傚ぇ閮ㄥ垎 Arduino Mega 鍏煎 3.3V 閫昏緫锛屽鏋滀笉鏀惧績鍙互鍔犱竴涓數骞宠浆鎹㈡ā鍧楋紙楼3锛夈€?
+> ⚠️ 树莓派 GPIO 是 3.3V，Arduino 是 5V。大部分 Arduino Mega 兼容 3.3V 逻辑，如果不放心可以加一个电平转换模块（¥3）。
+
 ---
 
-## 3.2 Arduino 鍥轰欢锛氫覆鍙ｆ寚浠ゆ帶鍒?
-鎶婅繖浠戒唬鐮佷笂浼犲埌 Arduino Mega锛?
+## 3.2 Arduino 固件：串口指令控制
+
+把这份代码上传到 Arduino Mega：
+
 ```cpp
-// car_firmware.ino - 瀹屾暣灏忚溅鍥轰欢
-// 閫氳繃涓插彛鎺ユ敹鎸囦护锛屾帶鍒剁數鏈?+ 璇诲彇浼犳劅鍣?
+// car_firmware.ino - 完整小车固件
+// 通过串口接收指令，控制电机 + 读取传感器
+
 #include <Wire.h>
-#include <Adafruit_SSD1306.h>  // OLED 搴?
-// ===== 鐢垫満寮曡剼 =====
+#include <Adafruit_SSD1306.h>  // OLED 库
+
+// ===== 电机引脚 =====
 struct Motor {
   int in1, in2, pwm;
 };
 Motor motors[4] = {
-  {22, 23, 6},   // 鍓嶅乏
-  {24, 25, 7},   // 鍓嶅彸
-  {26, 27, 8},   // 鍚庡乏
-  {28, 29, 9}    // 鍚庡彸
+  {22, 23, 6},   // 前左
+  {24, 25, 7},   // 前右
+  {26, 27, 8},   // 后左
+  {28, 29, 9}    // 后右
 };
 
-// ===== 缂栫爜鍣?=====
+// ===== 编码器 =====
 volatile long encoder_count[4] = {0, 0, 0, 0};
-const int encoder_pins[4] = {18, 20, 2, 4};  // A鐩?
-// ===== 瓒呭０娉?=====
+const int encoder_pins[4] = {18, 20, 2, 4};  // A相
+
+// ===== 超声波 =====
 struct Ultrasonic {
   int trig, echo;
   float distance;
 };
 Ultrasonic us_sensors[4] = {
-  {30, 31, 0},  // 鍓?  {32, 33, 0},  // 鍚?  {34, 35, 0},  // 宸?  {36, 37, 0}   // 鍙?};
+  {30, 31, 0},  // 前
+  {32, 33, 0},  // 后
+  {34, 35, 0},  // 左
+  {36, 37, 0}   // 右
+};
 
-// ===== IMU (GY-85 閫氳繃 I2C) =====
-float heading = 0; // 鑸悜瑙?
+// ===== IMU (GY-85 通过 I2C) =====
+float heading = 0; // 航向角
+
 // ===== OLED =====
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 
-// ===== 灏忚溅鐘舵€?=====
-float linear_x = 0;   // 鏈熸湜绾块€熷害
-float angular_z = 0;  // 鏈熸湜瑙掗€熷害
+// ===== 小车状态 =====
+float linear_x = 0;   // 期望线速度
+float angular_z = 0;  // 期望角速度
 bool emergency_stop = false;
 
-// ===== PID 鍙傛暟 =====
+// ===== PID 参数 =====
 float Kp = 0.5, Ki = 0.1, Kd = 0.05;
 long target_ticks[4] = {0};
 float integral[4] = {0};
 long last_error[4] = {0};
 
-// 缂栫爜鍣ㄤ腑鏂湇鍔″嚱鏁?void encISR0() { encoder_count[0]++; }
+// 编码器中断服务函数
+void encISR0() { encoder_count[0]++; }
 void encISR1() { encoder_count[1]++; }
 void encISR2() { encoder_count[2]++; }
 void encISR3() { encoder_count[3]++; }
 
 void setup() {
   Serial.begin(115200);
-  Serial1.begin(115200);  // 涓庢爲鑾撴淳閫氫俊鐨勪覆鍙?  
-  // 鐢垫満鍒濆鍖?  for (int i = 0; i < 4; i++) {
+  Serial1.begin(115200);  // 与树莓派通信的串口
+  
+  // 电机初始化
+  for (int i = 0; i < 4; i++) {
     pinMode(motors[i].in1, OUTPUT);
     pinMode(motors[i].in2, OUTPUT);
     pinMode(motors[i].pwm, OUTPUT);
@@ -77,13 +93,14 @@ void setup() {
     digitalWrite(motors[i].in2, LOW);
   }
   
-  // 瓒呭０娉㈠垵濮嬪寲
+  // 超声波初始化
   for (int i = 0; i < 4; i++) {
     pinMode(us_sensors[i].trig, OUTPUT);
     pinMode(us_sensors[i].echo, INPUT);
   }
   
-  // 缂栫爜鍣ㄤ腑鏂?  attachInterrupt(digitalPinToInterrupt(18), encISR0, RISING);
+  // 编码器中断
+  attachInterrupt(digitalPinToInterrupt(18), encISR0, RISING);
   attachInterrupt(digitalPinToInterrupt(20), encISR1, RISING);
   attachInterrupt(digitalPinToInterrupt(2),  encISR2, RISING);
   attachInterrupt(digitalPinToInterrupt(4),  encISR3, RISING);
@@ -97,41 +114,44 @@ void setup() {
   display.println("SmartCar Ready");
   display.display();
   
-  // IMU 鍒濆鍖?  Wire.begin();
-  // GY-85 鍒濆鍖?(MPU6050 + HMC5883L)
-  // 鍚庨潰姝ラ璇︾粏瀹炵幇
+  // IMU 初始化
+  Wire.begin();
+  // GY-85 初始化 (MPU6050 + HMC5883L)
+  // 后面步骤详细实现
 }
 
 void loop() {
-  // 1. 璇诲彇瓒呭０娉?  readUltrasonics();
+  // 1. 读取超声波
+  readUltrasonics();
   
-  // 2. 璇诲彇 IMU
+  // 2. 读取 IMU
   // readIMU();
   
-  // 3. 澶勭悊涓插彛鎸囦护锛堟潵鑷爲鑾撴淳锛?  processSerial();
+  // 3. 处理串口指令（来自树莓派）
+  processSerial();
   
-  // 4. PID 閫熷害鎺у埗
+  // 4. PID 速度控制
   pidControl();
   
-  // 5. 鏇存柊 OLED
+  // 5. 更新 OLED
   updateDisplay();
   
-  // 6. 鍙戦€佷紶鎰熷櫒鏁版嵁鍥炴爲鑾撴淳
+  // 6. 发送传感器数据回树莓派
   sendTelemetry();
   
-  delay(20); // 50Hz 鎺у埗寰幆
+  delay(20); // 50Hz 控制循环
 }
 
-// ===== 涓插彛鎸囦护瑙ｆ瀽 =====
+// ===== 串口指令解析 =====
 void processSerial() {
   if (Serial1.available()) {
     String cmd = Serial1.readStringUntil('\n');
     cmd.trim();
     
     if (cmd.startsWith("VEL ")) {
-      // 鏍煎紡: VEL 绾块€熷害 瑙掗€熷害
-      // 渚嬪: VEL 0.5 0.0   (鍓嶈繘鍗婇€?
-      //       VEL 0.0 0.3   (鍘熷湴宸﹁浆)
+      // 格式: VEL 线速度 角速度
+      // 例如: VEL 0.5 0.0   (前进半速)
+      //       VEL 0.0 0.3   (原地左转)
       int sp1 = cmd.indexOf(' ', 4);
       linear_x = cmd.substring(4, sp1).toFloat();
       angular_z = cmd.substring(sp1 + 1).toFloat();
@@ -166,16 +186,18 @@ void processSerial() {
 void calculateMotorSpeeds() {
   if (emergency_stop) { stopAll(); return; }
   
-  // 宸€熼┍鍔ㄥ姏瀛?  // 宸﹀彸杞€熷害 = 绾块€熷害 卤 (瑙掗€熷害 * 杞窛/2)
-  float wheel_base = 0.25; // 杞窛 25cm
+  // 差速驱动力学
+  // 左右轮速度 = 线速度 ± (角速度 * 轮距/2)
+  float wheel_base = 0.25; // 轮距 25cm
   float left_speed = linear_x - angular_z * wheel_base / 2.0;
   float right_speed = linear_x + angular_z * wheel_base / 2.0;
   
-  // 杞崲涓?PWM (0-255)
+  // 转换为 PWM (0-255)
   int pwm_left = constrain(abs(left_speed) * 255, 0, 255);
   int pwm_right = constrain(abs(right_speed) * 255, 0, 255);
   
-  // 璁剧疆 4 涓數鏈猴紙宸︼細鍓嶅乏+鍚庡乏锛屽彸锛氬墠鍙?鍚庡彸锛?  setMotor(0, left_speed > 0 ? 1 : -1, pwm_left);
+  // 设置 4 个电机（左：前左+后左，右：前右+后右）
+  setMotor(0, left_speed > 0 ? 1 : -1, pwm_left);
   setMotor(2, left_speed > 0 ? 1 : -1, pwm_left);
   setMotor(1, right_speed > 0 ? 1 : -1, pwm_right);
   setMotor(3, right_speed > 0 ? 1 : -1, pwm_right);
@@ -195,7 +217,7 @@ void stopAll() {
   }
 }
 
-// ===== 瓒呭０娉?=====
+// ===== 超声波 =====
 void readUltrasonics() {
   for (int i = 0; i < 4; i++) {
     digitalWrite(us_sensors[i].trig, LOW);
@@ -207,7 +229,7 @@ void readUltrasonics() {
     long duration = pulseIn(us_sensors[i].echo, HIGH, 30000);
     us_sensors[i].distance = duration * 0.034 / 2.0; // cm
     
-    // 鍓嶆柟瓒呭０娉?< 20cm 鑷姩鎬ュ仠
+    // 前方超声波 < 20cm 自动急停
     if (i == 0 && us_sensors[i].distance < 20 && us_sensors[i].distance > 0) {
       emergency_stop = true;
       stopAll();
@@ -215,7 +237,7 @@ void readUltrasonics() {
   }
 }
 
-// ===== PID 閫熷害鎺у埗 =====
+// ===== PID 速度控制 =====
 void pidControl() {
   unsigned long now = millis();
   static unsigned long last_time = 0;
@@ -229,19 +251,20 @@ void pidControl() {
     float derivative = (error - last_error[i]) / dt;
     last_error[i] = error;
     
-    // PID 杈撳嚭浣滀负 PWM 寰皟
+    // PID 输出作为 PWM 微调
     // float adjustment = Kp * error + Ki * integral[i] + Kd * derivative;
-    // (鍦?calculateMotorSpeeds 鐨勫熀纭€涓婂井璋?
+    // (在 calculateMotorSpeeds 的基础上微调)
   }
 }
 
-// ===== 鍙戦€侀仴娴嬫暟鎹?=====
+// ===== 发送遥测数据 =====
 void sendTelemetry() {
   static unsigned long last_send = 0;
   if (millis() - last_send < 200) return; // 5Hz
   last_send = millis();
   
-  // JSON 鏍煎紡鍙戦€佸埌鏍戣帗娲?  Serial1.print("{");
+  // JSON 格式发送到树莓派
+  Serial1.print("{");
   Serial1.print("\"enc\":[");
   for (int i = 0; i < 4; i++) {
     Serial1.print(encoder_count[i]);
@@ -259,7 +282,7 @@ void sendTelemetry() {
   Serial1.println("}");
 }
 
-// ===== OLED 鏄剧ず =====
+// ===== OLED 显示 =====
 void updateDisplay() {
   static unsigned long last_display = 0;
   if (millis() - last_display < 500) return;
@@ -281,8 +304,10 @@ void updateDisplay() {
 }
 ```
 
-### 闇€瑕佺殑 Arduino 搴?鍦?Arduino IDE 涓細
-1. 宸ュ叿 鈫?绠＄悊搴?2. 鎼滅储骞跺畨瑁咃細
+### 需要的 Arduino 库
+在 Arduino IDE 中：
+1. 工具 → 管理库
+2. 搜索并安装：
    - `Adafruit SSD1306`
    - `Adafruit GFX Library`
    - `Adafruit MPU6050`
@@ -290,7 +315,7 @@ void updateDisplay() {
 
 ---
 
-## 3.3 鏍戣帗娲剧锛歊OS2 涓插彛椹卞姩鑺傜偣
+## 3.3 树莓派端：ROS2 串口驱动节点
 
 ```bash
 cd ~/ros2_ws/src
@@ -301,8 +326,8 @@ ros2 pkg create --build-type ament_python smartcar_driver \
 ```python
 # ~/ros2_ws/src/smartcar_driver/smartcar_driver/arduino_bridge.py
 """
-Arduino Bridge - ROS2 鈫?Arduino Mega 涓插彛閫氫俊
-璁㈤槄 /cmd_vel 鈫?鍙戠粰 Arduino 鈫?璇诲彇浼犳劅鍣?鈫?鍙戝竷 ROS2 璇濋
+Arduino Bridge - ROS2 ↔ Arduino Mega 串口通信
+订阅 /cmd_vel → 发给 Arduino → 读取传感器 → 发布 ROS2 话题
 """
 
 import rclpy
@@ -318,42 +343,44 @@ class ArduinoBridge(Node):
     def __init__(self):
         super().__init__('arduino_bridge')
         
-        # 涓插彛杩炴帴
-        self.declare_parameter('port', '/dev/ttyAMA0')  # 鏍戣帗娲剧‖浠朵覆鍙?        port = self.get_parameter('port').value
+        # 串口连接
+        self.declare_parameter('port', '/dev/ttyAMA0')  # 树莓派硬件串口
+        port = self.get_parameter('port').value
         
         try:
             self.ser = serial.Serial(port, 115200, timeout=0.1)
-            self.get_logger().info(f'涓插彛宸茶繛鎺? {port}')
+            self.get_logger().info(f'串口已连接: {port}')
         except Exception as e:
-            self.get_logger().error(f'涓插彛杩炴帴澶辫触: {e}')
+            self.get_logger().error(f'串口连接失败: {e}')
             self.ser = None
         
-        # 璁㈤槄閫熷害鎸囦护
+        # 订阅速度指令
         self.cmd_sub = self.create_subscription(
             Twist, '/cmd_vel', self.cmd_callback, 10)
         
-        # 鍙戝竷浼犳劅鍣?        self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
+        # 发布传感器
+        self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.range_pubs = [
             self.create_publisher(Range, f'/ultrasonic/{d}', 10)
             for d in ['front', 'back', 'left', 'right']
         ]
         
-        # 鎺ユ敹绾跨▼
+        # 接收线程
         if self.ser:
             self.rx_thread = threading.Thread(target=self.read_serial, daemon=True)
             self.rx_thread.start()
         
-        self.get_logger().info('Arduino Bridge 灏辩华')
+        self.get_logger().info('Arduino Bridge 就绪')
     
     def cmd_callback(self, msg: Twist):
-        """灏?ROS2 Twist 杞负 Arduino 鎸囦护"""
+        """将 ROS2 Twist 转为 Arduino 指令"""
         if not self.ser:
             return
         cmd = f"VEL {msg.linear.x:.3f} {msg.angular.z:.3f}\n"
         self.ser.write(cmd.encode())
     
     def read_serial(self):
-        """璇诲彇 Arduino 鍙戞潵鐨勪紶鎰熷櫒鏁版嵁"""
+        """读取 Arduino 发来的传感器数据"""
         while rclpy.ok():
             try:
                 line = self.ser.readline().decode().strip()
@@ -364,17 +391,19 @@ class ArduinoBridge(Node):
                 pass
     
     def publish_sensors(self, data):
-        """鍙戝竷浼犳劅鍣ㄦ暟鎹埌 ROS2"""
+        """发布传感器数据到 ROS2"""
         now = self.get_clock().now().to_msg()
         
-        # 缂栫爜鍣?鈫?閲岀▼璁?        odom = Odometry()
+        # 编码器 → 里程计
+        odom = Odometry()
         odom.header.stamp = now
         odom.header.frame_id = 'odom'
-        # 绠€鍖栵細鐩存帴鐢ㄧ紪鐮佸櫒鍧囧€兼帹绠?        avg_ticks = sum(data.get('enc', [0])) / 4.0
+        # 简化：直接用编码器均值推算
+        avg_ticks = sum(data.get('enc', [0])) / 4.0
         odom.pose.pose.position.x = avg_ticks * 0.001  # 1 tick = 1mm
         self.odom_pub.publish(odom)
         
-        # 瓒呭０娉?鈫?Range
+        # 超声波 → Range
         directions = ['front', 'back', 'left', 'right']
         for i, d in enumerate(directions):
             if i < len(data.get('us', [])):
@@ -382,7 +411,7 @@ class ArduinoBridge(Node):
                 rng.header.stamp = now
                 rng.header.frame_id = f'ultrasonic_{d}'
                 rng.radiation_type = Range.ULTRASOUND
-                rng.range = data['us'][i] / 100.0  # cm 鈫?m
+                rng.range = data['us'][i] / 100.0  # cm → m
                 rng.min_range = 0.02
                 rng.max_range = 4.0
                 self.range_pubs[i].publish(rng)
@@ -402,32 +431,36 @@ def main():
 
 ---
 
-## 3.4 閿洏閬ユ帶
+## 3.4 键盘遥控
 
 ```bash
-# 鍦ㄦ爲鑾撴淳涓?sudo apt install -y ros-humble-teleop-twist-keyboard
+# 在树莓派上
+sudo apt install -y ros-humble-teleop-twist-keyboard
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
 
-鎸?`i` 鍓嶈繘銆乣,` 鍚庨€€銆乣j` 宸﹁浆銆乣l` 鍙宠浆銆乣k` 鍋滄銆?
-> 閰嶅悎涓婇潰鐨?arduino_bridge 鑺傜偣鍦ㄥ彟涓€涓粓绔繍琛岋紝灏忚溅灏辫兘閿洏閬ユ帶浜嗭紒
+按 `i` 前进、`,` 后退、`j` 左转、`l` 右转、`k` 停止。
+
+> 配合上面的 arduino_bridge 节点在另一个终端运行，小车就能键盘遥控了！
 
 ---
 
-## 鉁?Day 5-6 楠屾敹鏍囧噯
+## ✅ Day 5-6 验收标准
 
-- [ ] 鏍戣帗娲捐兘閫氳繃涓插彛涓?Arduino 閫氫俊锛圥ING鈫扨ONG锛?- [ ] `ros2 run smartcar_driver arduino_bridge` 姝ｅ父杩愯
-- [ ] 閿洏鑳介仴鎺ц溅鍓嶈繘/鍚庨€€/杞悜
-- [ ] 鍓嶆柟瓒呭０娉?< 20cm 鑷姩鎬ュ仠
-- [ ] OLED 鏄剧ず閫熷害鍜屼紶鎰熷櫒鏁版嵁
+- [ ] 树莓派能通过串口与 Arduino 通信（PING→PONG）
+- [ ] `ros2 run smartcar_driver arduino_bridge` 正常运行
+- [ ] 键盘能遥控车前进/后退/转向
+- [ ] 前方超声波 < 20cm 自动急停
+- [ ] OLED 显示速度和传感器数据
 
-### 璋冭瘯鎶€宸?
+### 调试技巧
+
 ```bash
-# 娴嬭瘯涓插彛
+# 测试串口
 echo "PING" > /dev/ttyAMA0
-cat /dev/ttyAMA0  # 搴旂湅鍒?PONG
+cat /dev/ttyAMA0  # 应看到 PONG
 
-# 鏌ョ湅 ROS2 璇濋
+# 查看 ROS2 话题
 ros2 topic list
 ros2 topic echo /cmd_vel
 ros2 topic echo /ultrasonic/front
